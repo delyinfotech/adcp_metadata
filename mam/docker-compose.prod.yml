@@ -1,0 +1,439 @@
+version: '3.8'
+
+# =============================================================================
+# MediaX MAM - Production Docker Compose
+# =============================================================================
+# Usage:
+#   1. Copy .env.production.example to .env.production
+#   2. Update all secrets and domain settings
+#   3. Create Docker secrets: ./scripts/create-secrets.sh
+#   4. Deploy: docker compose -f docker-compose.prod.yml up -d
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # Traefik - Reverse Proxy & SSL Termination
+  # ===========================================================================
+  traefik:
+    image: traefik:v3.0
+    container_name: mediax-traefik
+    restart: always
+    command:
+      # API and Dashboard
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      # Docker provider
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=mediax-network"
+      # Entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # HTTP to HTTPS redirect
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      # Let's Encrypt SSL
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      # Logging
+      - "--log.level=INFO"
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certificates:/letsencrypt
+    networks:
+      - mediax-network
+    labels:
+      # Dashboard
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.dashboard.middlewares=auth"
+      - "traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+  # ===========================================================================
+  # Frontend - Next.js Web Application
+  # ===========================================================================
+  mediax-web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+    image: mediax-web:${VERSION:-latest}
+    container_name: mediax-web
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://api.${DOMAIN}/api/v1
+      - NEXT_PUBLIC_WS_URL=wss://api.${DOMAIN}
+      - NEXT_PUBLIC_APP_NAME=${APP_NAME:-MediaX}
+      - NEXT_PUBLIC_ENABLE_AI_FEATURES=true
+    depends_on:
+      mediax-api:
+        condition: service_healthy
+    networks:
+      - mediax-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
+      - "traefik.http.routers.web.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.web.middlewares=web-compress,web-headers"
+      - "traefik.http.services.web.loadbalancer.server.port=3000"
+      # Compression
+      - "traefik.http.middlewares.web-compress.compress=true"
+      # Security Headers
+      - "traefik.http.middlewares.web-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.web-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.web-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.web-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.web-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+
+  # ===========================================================================
+  # Backend - NestJS API
+  # ===========================================================================
+  mediax-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    image: mediax-api:${VERSION:-latest}
+    container_name: mediax-api
+    restart: always
+    environment:
+      # Application
+      - NODE_ENV=production
+      - PORT=4000
+      - API_PREFIX=api/v1
+      # Database (secrets injected)
+      - DATABASE_HOST=mediax-postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USERNAME=${DATABASE_USERNAME}
+      - DATABASE_NAME=${DATABASE_NAME}
+      - DATABASE_SYNCHRONIZE=false
+      - DATABASE_LOGGING=false
+      - DATABASE_SSL=${DATABASE_SSL:-false}
+      # JWT (secrets injected)
+      - JWT_EXPIRATION=15m
+      - JWT_REFRESH_EXPIRATION=7d
+      # Redis
+      - REDIS_HOST=mediax-redis
+      - REDIS_PORT=6379
+      # MinIO
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_BUCKET_ORIGINALS=content-originals
+      - MINIO_BUCKET_PROCESSED=content-processed
+      - MINIO_BUCKET_ARTIFACTS=extraction-artifacts
+      - MINIO_USE_SSL=false
+      # CDN
+      - CDN_BASE_URL=https://cdn.${DOMAIN}
+      # Kafka
+      - KAFKA_ENABLED=true
+      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_CLIENT_ID=mediax-api
+      - KAFKA_GROUP_ID=mediax-consumers
+      # Metadata Extraction
+      - METADATA_API_URL=http://metadata-layer:3005
+      # CORS
+      - CORS_ORIGIN=https://${DOMAIN},https://www.${DOMAIN}
+      - CORS_CREDENTIALS=true
+      # Rate Limiting
+      - RATE_LIMIT_TTL=60
+      - RATE_LIMIT_MAX=100
+    secrets:
+      - database_password
+      - jwt_secret
+      - jwt_refresh_secret
+      - minio_access_key
+      - minio_secret_key
+      - redis_password
+    depends_on:
+      mediax-postgres:
+        condition: service_healthy
+      mediax-redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - mediax-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.${DOMAIN}`)"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.api.middlewares=api-ratelimit,api-headers"
+      - "traefik.http.services.api.loadbalancer.server.port=4000"
+      # Rate Limiting
+      - "traefik.http.middlewares.api-ratelimit.ratelimit.average=100"
+      - "traefik.http.middlewares.api-ratelimit.ratelimit.burst=50"
+      - "traefik.http.middlewares.api-ratelimit.ratelimit.period=1m"
+      # Security Headers
+      - "traefik.http.middlewares.api-headers.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
+      - "traefik.http.middlewares.api-headers.headers.accesscontrolallowheaders=Content-Type,Authorization"
+      - "traefik.http.middlewares.api-headers.headers.accesscontrolmaxage=86400"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:4000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+
+  # ===========================================================================
+  # PostgreSQL Database with pgvector
+  # ===========================================================================
+  mediax-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: mediax-postgres
+    restart: always
+    environment:
+      - POSTGRES_DB=${DATABASE_NAME}
+      - POSTGRES_USER=${DATABASE_USERNAME}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/database_password
+    secrets:
+      - database_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
+    networks:
+      - mediax-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USERNAME} -d ${DATABASE_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+
+  # ===========================================================================
+  # Redis Cache
+  # ===========================================================================
+  mediax-redis:
+    image: redis:7-alpine
+    container_name: mediax-redis
+    restart: always
+    command: >
+      redis-server
+      --requirepass "${REDIS_PASSWORD}"
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - mediax-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+
+  # ===========================================================================
+  # MinIO Object Storage
+  # ===========================================================================
+  minio:
+    image: minio/minio:RELEASE.2024-12-13T22-19-12Z
+    container_name: mediax-minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER_FILE=/run/secrets/minio_access_key
+      - MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio_secret_key
+      - MINIO_NOTIFY_KAFKA_ENABLE_PRIMARY=on
+      - MINIO_NOTIFY_KAFKA_BROKERS_PRIMARY=kafka:9092
+      - MINIO_NOTIFY_KAFKA_TOPIC_PRIMARY=minio.events
+    secrets:
+      - minio_access_key
+      - minio_secret_key
+    volumes:
+      - minio_data:/data
+    networks:
+      - mediax-network
+    labels:
+      - "traefik.enable=true"
+      # MinIO API (S3)
+      - "traefik.http.routers.minio-api.rule=Host(`cdn.${DOMAIN}`)"
+      - "traefik.http.routers.minio-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.minio-api.service=minio-api"
+      - "traefik.http.services.minio-api.loadbalancer.server.port=9000"
+      # MinIO Console
+      - "traefik.http.routers.minio-console.rule=Host(`minio.${DOMAIN}`)"
+      - "traefik.http.routers.minio-console.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.minio-console.service=minio-console"
+      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+
+  # ===========================================================================
+  # Kafka & Zookeeper
+  # ===========================================================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: mediax-zookeeper
+    restart: always
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - mediax-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: mediax-kafka
+    restart: always
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - mediax-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+
+  # ===========================================================================
+  # MinIO Initialization
+  # ===========================================================================
+  minio-init:
+    image: minio/mc:latest
+    container_name: mediax-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for MinIO...';
+      sleep 10;
+      mc alias set mediax http://minio:9000 $$(cat /run/secrets/minio_access_key) $$(cat /run/secrets/minio_secret_key);
+      mc mb mediax/content-originals --ignore-existing;
+      mc mb mediax/content-processed --ignore-existing;
+      mc mb mediax/extraction-artifacts --ignore-existing;
+      mc version enable mediax/content-originals;
+      mc event add mediax/content-originals arn:minio:sqs::PRIMARY:kafka --event put,delete --suffix .mp4,.mov,.avi,.mkv,.jpg,.jpeg,.png,.webp,.mp3,.wav,.flac || true;
+      echo 'MinIO initialization complete!';
+      "
+    secrets:
+      - minio_access_key
+      - minio_secret_key
+    networks:
+      - mediax-network
+
+# =============================================================================
+# Docker Secrets
+# =============================================================================
+secrets:
+  database_password:
+    file: ./secrets/database_password.txt
+  jwt_secret:
+    file: ./secrets/jwt_secret.txt
+  jwt_refresh_secret:
+    file: ./secrets/jwt_refresh_secret.txt
+  minio_access_key:
+    file: ./secrets/minio_access_key.txt
+  minio_secret_key:
+    file: ./secrets/minio_secret_key.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  traefik-certificates:
+    name: mediax_traefik_certs
+  postgres_data:
+    name: mediax_postgres_data
+  redis_data:
+    name: mediax_redis_data
+  minio_data:
+    name: mediax_minio_data
+  kafka_data:
+    name: mediax_kafka_data
+  zookeeper_data:
+    name: mediax_zookeeper_data
+  zookeeper_logs:
+    name: mediax_zookeeper_logs
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  mediax-network:
+    name: mediax-network
+    driver: bridge

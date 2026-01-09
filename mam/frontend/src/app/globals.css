@@ -1,0 +1,126 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 32 40% 96%;
+  --foreground: 212 18% 14%;
+  --card: 30 38% 98%;
+  --card-foreground: 212 18% 14%;
+  --primary: 16 78% 46%;
+  --primary-foreground: 30 38% 96%;
+  --secondary: 213 30% 18%;
+  --secondary-foreground: 30 38% 96%;
+  --accent: 168 36% 38%;
+  --accent-foreground: 30 38% 96%;
+  --muted: 30 22% 90%;
+  --muted-foreground: 213 10% 42%;
+  --border: 212 12% 82%;
+  --ring: 16 78% 46%;
+  --radius: 18px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body), 'Segoe UI', sans-serif;
+  color: hsl(var(--foreground));
+  background-color: hsl(var(--background));
+  background-image:
+    linear-gradient(120deg, rgba(255, 236, 218, 0.65), transparent 60%),
+    radial-gradient(1200px 600px at 10% -10%, rgba(236, 149, 100, 0.35), transparent 60%),
+    radial-gradient(900px 500px at 90% 10%, rgba(90, 177, 166, 0.2), transparent 60%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.7)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(15, 23, 42, 0.04) 0px,
+      rgba(15, 23, 42, 0.04) 1px,
+      transparent 1px,
+      transparent 110px
+    );
+  background-attachment: fixed;
+}
+
+.font-display {
+  font-family: var(--font-display), 'Times New Roman', serif;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(16, 24, 40, 0.08);
+  box-shadow: 0 28px 60px rgba(32, 36, 41, 0.12);
+  backdrop-filter: blur(14px);
+}
+
+.soft-border {
+  border: 1px solid rgba(16, 24, 40, 0.08);
+}
+
+.text-shadow {
+  text-shadow: 0 10px 40px rgba(34, 34, 34, 0.16);
+}
+
+.panel {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 24px 50px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(16px);
+}
+
+.ghost-grid {
+  background-image:
+    linear-gradient(transparent 0, rgba(15, 23, 42, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, transparent 0, rgba(15, 23, 42, 0.03) 1px, transparent 1px);
+  background-size: 90px 90px;
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes rise {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+.animate-rise {
+  animation: rise 0.6s ease-out both;
+}
+
+.animate-shimmer {
+  background-size: 200% 200%;
+  animation: shimmer 3.5s ease infinite;
+}
