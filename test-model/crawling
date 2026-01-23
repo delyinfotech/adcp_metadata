@@ -1,0 +1,149 @@
+import os
+import time
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import quote
+from tqdm import tqdm
+
+# ==============================
+# CONFIG
+# ==============================
+BASE_DIR = r"C:\dataset_politisi"
+IMAGES_PER_PERSON = 30
+DELAY = 1.5  # seconds
+
+POLITISI = [
+    "Joko Widodo",
+    "Prabowo Subianto",
+    "Megawati Soekarnoputri",
+    "Susilo Bambang Yudhoyono",
+    "Anies Baswedan",
+    "Ganjar Pranowo",
+    "Puan Maharani",
+    "Airlangga Hartarto",
+    "Agus Harimurti Yudhoyono",
+    "Muhaimin Iskandar",
+
+    "Ridwan Kamil",
+    "Tri Rismaharini",
+    "Basuki Tjahaja Purnama",
+    "Sandiaga Uno",
+    "Mahfud MD",
+    "Sri Mulyani Indrawati",
+    "Bahlil Lahadalia",
+    "Zulkifli Hasan",
+    "Hasto Kristiyanto",
+    "Ahmad Syaikhu",
+
+    "Andika Perkasa",
+    "Bamsoet",
+    "Fahri Hamzah",
+    "Yusril Ihza Mahendra",
+    "Luhut Binsar Pandjaitan",
+    "Nadiem Makarim",
+    "Erick Thohir",
+    "Maruarar Sirait",
+    "Ahmad Dhani",
+    "Viktor Laiskodat",
+
+    "Khofifah Indar Parawansa",
+    "Emil Dardak",
+    "Gibran Rakabuming Raka",
+    "Kaesang Pangarep",
+    "Rocky Gerung",
+    "Refly Harun",
+    "Hidayat Nur Wahid",
+    "Ahmad Muzani",
+    "Yandri Susanto",
+    "Fadli Zon",
+
+    "Rachmat Gobel",
+    "Sofyan Tan",
+    "Said Abdullah",
+    "Ahmad Ali",
+    "Rieke Diah Pitaloka",
+    "Grace Natalie",
+    "Tsamara Amany",
+    "Bima Arya",
+    "Ilham Habibie",
+    "Moeldoko"
+]
+
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0 Safari/537.36"
+    )
+}
+
+# ==============================
+# FUNCTION
+# ==============================
+def download_image(url, filepath):
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        if r.status_code == 200:
+            with open(filepath, "wb") as f:
+                f.write(r.content)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def crawl_images_bing(query, save_dir, limit=20):
+    os.makedirs(save_dir, exist_ok=True)
+
+    search_url = (
+        "https://www.bing.com/images/search?q="
+        + quote(query + " portrait face")
+        + "&form=HDRSC2"
+    )
+
+    resp = requests.get(search_url, headers=HEADERS)
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    images = soup.find_all("img")
+    downloaded = 0
+
+    for img in images:
+        if downloaded >= limit:
+            break
+
+        src = img.get("src") or img.get("data-src")
+        if not src or not src.startswith("http"):
+            continue
+
+        filename = f"{query.replace(' ', '_')}_{downloaded}.jpg"
+        filepath = os.path.join(save_dir, filename)
+
+        if download_image(src, filepath):
+            downloaded += 1
+            time.sleep(0.3)
+
+    return downloaded
+
+
+# ==============================
+# MAIN
+# ==============================
+if __name__ == "__main__":
+    print("📸 Starting Image Crawling...\n")
+
+    for name in tqdm(POLITISI):
+        folder_name = name.replace(" ", "_")
+        save_path = os.path.join(BASE_DIR, folder_name)
+
+        print(f"\n🔍 Crawling images for: {name}")
+        count = crawl_images_bing(
+            query=name,
+            save_dir=save_path,
+            limit=IMAGES_PER_PERSON
+        )
+
+        print(f"✅ {count} images saved in {save_path}")
+        time.sleep(DELAY)
+
+    print("\n🎉 Done!")
